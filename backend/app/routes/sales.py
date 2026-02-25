@@ -6,36 +6,49 @@ from app.services.sales_service import SalesService
 from app.models.sales import SalesTransaction
 from app.models.store import Store
 from app.schemas import SalesTransactionRead
+from app.utils.jwt_auth import get_current_user
+from app.config import MAX_UPLOAD_SIZE_MB
 from typing import List
 
 router = APIRouter(prefix="/api", tags=["sales"])
 
+_ALLOWED_CONTENT_TYPES = {"text/csv", "application/csv", "application/octet-stream", "text/plain"}
+
 @router.post("/upload")
-async def upload_csv(file: UploadFile = File(...), user_id: int = Query(None), db: Session = Depends(get_db)):
+async def upload_csv(file: UploadFile = File(...), current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     """CSVファイルをアップロードして販売データを登録
     
     user_idが与えられた場合、権限チェックを実施します。
     一般ユーザー(role != 'admin')は自身の店舗のデータのみアップロード可能です。
     CSVに複数の店舗が含まれている場合、一般ユーザーの場合は自身の店舗のデータのみを抽出します。
     """
+    # ファイル名の拡張子チェック
+    filename = file.filename or ""
+    if not filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="CSVファイル（.csv）のみアップロードできます")
+    # Content-Type チェック（ブラウザによって変わるため緩め）
+    content_type = (file.content_type or "").split(";")[0].strip().lower()
+    if content_type and content_type not in _ALLOWED_CONTENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"サポートされないファイル形式です: {content_type}")
+
     try:
         import hashlib
-        from app.models.user import User
         
-        print(f"📤 CSV Upload started - user_id: {user_id} (type: {type(user_id).__name__})")
-        
+        print(f"[CSV] Upload started - user: {current_user.username} (id={current_user.id}, role={current_user.role})")
+
         # ファイルをバイナリで読み込み
         content = await file.read()
+
+        # ファイルサイズ上限チェック
+        max_bytes = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+        if len(content) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"ファイルサイズが上限（{MAX_UPLOAD_SIZE_MB}MB）を超えています")
         
         # CSVから店舗情報を抽出
         store_info_list = CSVService.extract_store_info(content)
         
-        # ユーザー情報取得
-        user = None
-        if user_id:
-            user = db.query(User).filter(User.id == user_id).first()
-            if not user:
-                raise HTTPException(status_code=401, detail="ユーザーが見つかりません")
+        # ユーザー情報取得（JWTから取得済み）
+        user = current_user
         
         # 抽出した店舗情報をDBに登録（一般ユーザーは自身の店舗のみ）
         registered_stores = []
@@ -129,13 +142,14 @@ async def upload_csv(file: UploadFile = File(...), user_id: int = Query(None), d
         raise HTTPException(status_code=400, detail=error_detail)
 
 @router.get("/transactions", response_model=List[SalesTransactionRead])
-def get_transactions(db: Session = Depends(get_db), skip: int = 0, limit: int = 100):
+def get_transactions(current_user=Depends(get_current_user), db: Session = Depends(get_db), skip: int = 0, limit: int = 100):
     """販売トランザクション一覧を取得"""
     transactions = db.query(SalesTransaction).offset(skip).limit(limit).all()
     return transactions
 
 @router.get("/summary/daily")
 def get_daily_summary(
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     store_code: str = None,
     start_date: str = None,
@@ -162,6 +176,7 @@ def get_daily_summary(
 
 @router.get("/summary/product")
 def get_product_summary(
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     store_code: str = None,
     start_date: str = None,
@@ -188,6 +203,7 @@ def get_product_summary(
 
 @router.get("/summary/staff-list")
 def get_staff_list(
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     store_code: str = None
 ):
@@ -205,6 +221,7 @@ def get_staff_list(
 
 @router.get("/summary/staff-performance")
 def get_staff_performance(
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     staff_id: str = None,
     store_code: str = None,
@@ -233,6 +250,7 @@ def get_staff_performance(
 
 @router.get("/summary/staff-aggregated")
 def get_staff_aggregated(
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     staff_id: str = None,
     store_code: str = None,
@@ -269,6 +287,7 @@ def get_staff_aggregated(
 
 @router.get("/au1-collection/summary")
 def get_au1_collection_summary(
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     staff_id: str = None,
     store_code: str = None,
@@ -297,6 +316,7 @@ def get_au1_collection_summary(
 
 @router.get("/au1-collection/detail")
 def get_au1_collection_detail(
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     staff_id: str = None,
     store_code: str = None,
@@ -327,6 +347,7 @@ def get_au1_collection_detail(
 
 @router.get("/au1-collection/category")
 def get_au1_collection_category(
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     staff_id: str = None,
     store_code: str = None,
@@ -356,6 +377,7 @@ def get_au1_collection_category(
 
 @router.get("/au1-collection/daily")
 def get_au1_collection_daily(
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     staff_id: str = None,
     store_code: str = None,
@@ -383,6 +405,7 @@ def get_au1_collection_daily(
 
 @router.get("/au1-collection/total")
 def get_au1_collection_total(
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     store_code: str = None,
     start_date: str = None,
@@ -424,6 +447,7 @@ def get_au1_collection_total(
 
 @router.get("/smartphone/unit-price")
 def get_smartphone_unit_price(
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     staff_id: str = None,
     store_code: str = None,
@@ -442,6 +466,7 @@ def get_smartphone_unit_price(
 
 @router.get("/smartphone/summary")
 def get_smartphone_sales_summary(
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     staff_id: str = None,
     store_code: str = None,

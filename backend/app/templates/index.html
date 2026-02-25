@@ -281,7 +281,7 @@
 <body>
     <header>
         <h1>🦊 Iroha</h1>
-        <p>S002078</p>
+        <p id="appVersion">v-.-.-</p>
         <div style="margin-top: 15px; display: flex; align-items: center; gap: 15px;">
             <div id="storeSelectSection" style="display: none; align-items: center; gap: 15px;">
                 <label for="storeSelect" style="font-weight: bold; color: white;">店舗：</label>
@@ -733,6 +733,36 @@
     <script>
         const API_BASE = '/api';
 
+        // ── JWT認証ヘルパー ──────────────────────────────────────────────
+        // 全APIリクエストに Authorization: Bearer <token> を自動付与する
+        function getAuthHeaders() {
+            const token = localStorage.getItem('accessToken');
+            return token ? { 'Authorization': `Bearer ${token}` } : {};
+        }
+
+        // 複数の並行リクエストが同時に401を返しても1回だけ通知するためのフラグ
+        let _sessionExpiredHandling = false;
+
+        async function authFetch(url, options = {}) {
+            options.headers = Object.assign({}, options.headers || {}, getAuthHeaders());
+            const res = await fetch(url, options);
+            if (res.status === 401) {
+                // 既にログアウト処理中なら何もしない（多重アラート防止）
+                if (_sessionExpiredHandling) return res;
+                _sessionExpiredHandling = true;
+
+                // トークン期限切れ → 強制ログアウト
+                ['accessToken', 'userId', 'username', 'userRole', 'userStoreCode'].forEach(k => localStorage.removeItem(k));
+                if (typeof applyAuthUI === 'function') applyAuthUI();
+                alert('セッションが期限切れです。再度ログインしてください。');
+
+                // フラグをリセット（次回ログイン後に再び検知できるよう）
+                _sessionExpiredHandling = false;
+            }
+            return res;
+        }
+        // ────────────────────────────────────────────────────────────────
+
         // タブ切り替え
         document.querySelectorAll('.nav-btn').forEach(btn => {
             btn.addEventListener('click', function() {
@@ -810,7 +840,7 @@
                 const formData = new FormData();
                 formData.append('file', csvFile.files[0]);
                 
-                const response = await fetch(`${API_BASE}/upload`, {
+                const response = await authFetch(`${API_BASE}/upload`, {
                     method: 'POST',
                     body: formData
                 });
@@ -895,7 +925,7 @@
                 unitPriceUrl += queryString;
                 
                 // 全体統計を読み込み
-                const response = await fetch(url);
+                const response = await authFetch(url);
                 const data = await response.json();
                 
                 const totalSales = data.total_sales || 0;
@@ -909,10 +939,10 @@
                 document.getElementById('au1GrossProfitRate').textContent = profitRate;
                 
                 // スタッフ別実績と台当たり単価を読み込み
-                const staffResponse = await fetch(staffUrl);
+                const staffResponse = await authFetch(staffUrl);
                 const staffData = await staffResponse.json();
                 
-                const unitPriceResponse = await fetch(unitPriceUrl);
+                const unitPriceResponse = await authFetch(unitPriceUrl);
                 const unitPriceData = await unitPriceResponse.json();
                 
                 renderDashboardStaffTable(staffData);
@@ -1038,7 +1068,7 @@
                 }
 
                 const adminUserId = localStorage.getItem('userId');
-                const res = await fetch(`${API_BASE}/auth/admin/create-user?admin_user_id=${adminUserId}`, {
+                const res = await authFetch(`${API_BASE}/auth/admin/create-user`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1066,7 +1096,7 @@
         async function loadUserList() {
             try {
                 const adminUserId = localStorage.getItem('userId');
-                const res = await fetch(`${API_BASE}/auth/admin/users?admin_user_id=${adminUserId}`);
+                const res = await authFetch(`${API_BASE}/auth/admin/users`);
                 if (!res.ok) throw new Error('ユーザー一覧取得に失敗しました');
 
                 const users = await res.json();
@@ -1090,17 +1120,19 @@
                     
                     // staff_nameをエスケープ
                     const escapedStaffName = (user.staff_name || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+                    const escapedStoreCode = (user.store_code || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
                     
                     html += `<tr style="background-color: ${bgColor}; border-bottom: 1px solid #ddd;">
                         <td style="padding: 10px;">${user.id}</td>
                         <td style="padding: 10px; font-weight: bold;">${user.username}</td>
                         <td style="padding: 10px;">${user.staff_name}</td>
-                        <td style="padding: 10px;">${user.store_code}</td>
+                        <td style="padding: 10px;">${user.store_code || '未設定'}</td>
                         <td style="padding: 10px;">${roleText}</td>
                         <td style="padding: 10px;">${statusText}</td>
                         <td style="padding: 10px;">
                             <button class="upload-button" onclick="resetUserPassword('${user.username}')" style="padding: 4px 8px; font-size: 12px; background-color: #e67e22; margin-right: 4px;">リセット</button>
-                            <button class="upload-button" onclick="editUserStaffName(this)" data-username="${user.username}" data-staff-name="${escapedStaffName}" style="padding: 4px 8px; font-size: 12px; background-color: #3498db; margin-right: 4px;">編集</button>
+                            <button class="upload-button" onclick="editUserStaffName(this)" data-username="${user.username}" data-staff-name="${escapedStaffName}" style="padding: 4px 8px; font-size: 12px; background-color: #3498db; margin-right: 4px;">名前編集</button>
+                            <button class="upload-button" onclick="editUserStoreCode(this)" data-username="${user.username}" data-store-code="${escapedStoreCode}" style="padding: 4px 8px; font-size: 12px; background-color: #27ae60; margin-right: 4px;">店舗変更</button>
                             <button class="upload-button" onclick="deleteUser('${user.username}')" style="padding: 4px 8px; font-size: 12px; background-color: #e74c3c;">削除</button>
                         </td>
                     </tr>`;
@@ -1118,7 +1150,7 @@
         async function loadAdminStoreList() {
             try {
                 console.log('🔄 Loading store list for admin panel...');
-                const response = await fetch(`${API_BASE}/admin/stores`);
+                const response = await authFetch(`${API_BASE}/admin/stores`);
                 
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
@@ -1173,8 +1205,8 @@
 
             try {
                 const adminUserId = localStorage.getItem('userId');
-                const response = await fetch(
-                    `${API_BASE}/admin/delete-store?store_id=${storeId}&admin_user_id=${adminUserId}`,
+                const response = await authFetch(
+                    `${API_BASE}/admin/delete-store?store_id=${storeId}`,
                     { method: 'DELETE' }
                 );
 
@@ -1204,7 +1236,7 @@
 
             try {
                 const adminUserId = localStorage.getItem('userId');
-                const res = await fetch(`${API_BASE}/auth/admin/reset-password?admin_user_id=${adminUserId}`, {
+                const res = await authFetch(`${API_BASE}/auth/admin/reset-password`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username })
@@ -1212,7 +1244,7 @@
 
                 const data = await res.json();
                 if (res.ok) {
-                    alert(`パスワードをリセットしました\n新パスワード: ${data.default_password}`);
+                    alert(`パスワードをリセットしました\n\nユーザー: ${data.username}\n仮パスワード: ${data.temporary_password}\n\n※ 初回ログイン後すぐに変更してください`);
                     loadUserList();
                 } else {
                     alert(`エラー: ${data.detail}`);
@@ -1228,7 +1260,7 @@
 
             try {
                 const adminUserId = localStorage.getItem('userId');
-                const res = await fetch(`${API_BASE}/auth/admin/users/${username}?admin_user_id=${adminUserId}`, {
+                const res = await authFetch(`${API_BASE}/auth/admin/users/${username}`, {
                     method: 'DELETE'
                 });
 
@@ -1258,8 +1290,7 @@
             if (newName === null || newName.trim() === '') return;
 
             try {
-                const adminUserId = localStorage.getItem('userId');
-                const res = await fetch(`${API_BASE}/auth/admin/users/${username}?admin_user_id=${adminUserId}`, {
+                const res = await authFetch(`${API_BASE}/auth/admin/users/${username}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ staff_name: newName })
@@ -1278,6 +1309,39 @@
             }
         }
 
+        async function editUserStoreCode(button) {
+            const username = button.getAttribute('data-username');
+            let currentCode = button.getAttribute('data-store-code');
+
+            // エスケープをデコード
+            const textarea = document.createElement('textarea');
+            textarea.innerHTML = currentCode;
+            currentCode = textarea.value;
+
+            const newCode = prompt(`店舗コードを変更してください\n現在: ${currentCode || '未設定'}\n\n※ 空白にすると未設定になります`, currentCode);
+            if (newCode === null) return;  // キャンセル
+
+            try {
+                const res = await authFetch(`${API_BASE}/auth/admin/users/${username}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ store_code: newCode.trim() })
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    const displayCode = data.store_code || '未設定';
+                    alert(`店舗コードを更新しました\nユーザー: ${username}\n店舗コード: ${displayCode}`);
+                    loadUserList();
+                } else {
+                    alert(`エラー: ${data.detail}`);
+                }
+            } catch (error) {
+                console.error('店舗コード更新エラー:', error);
+                alert(`エラー: ${error.message}`);
+            }
+        }
+
         async function loadSecurityLogs() {
             try {
                 const adminUserId = localStorage.getItem('userId');
@@ -1289,10 +1353,10 @@
                 
                 messageDiv.innerHTML = '<p style="color: #3498db;">ログを読み込み中...</p>';
                 
-                const url = `${API_BASE}/admin/security-logs?admin_user_id=${adminUserId}&days=7&limit=500`;
+                const url = `${API_BASE}/admin/security-logs?days=7&limit=500`;
                 console.log('Fetching from:', url);
                 
-                const res = await fetch(url);
+                const res = await authFetch(url);
                 console.log('Response status:', res.status);
                 
                 const data = await res.json();
@@ -1345,7 +1409,7 @@
                     throw new Error('ユーザーIDが見つかりません');
                 }
                 
-                const res = await fetch(`${API_BASE}/admin/security-logs/${logId}?admin_user_id=${adminUserId}`, {
+                const res = await authFetch(`${API_BASE}/admin/security-logs/${logId}`, {
                     method: 'DELETE'
                 });
                 
@@ -1372,7 +1436,7 @@
                     throw new Error('ユーザーIDが見つかりません');
                 }
                 
-                const res = await fetch(`${API_BASE}/admin/security-logs-all?admin_user_id=${adminUserId}`, {
+                const res = await authFetch(`${API_BASE}/admin/security-logs-all`, {
                     method: 'DELETE'
                 });
                 
@@ -1391,7 +1455,7 @@
         async function loadSecurityStats() {
             try {
                 const adminUserId = localStorage.getItem('userId');
-                const res = await fetch(`${API_BASE}/admin/security-stats?admin_user_id=${adminUserId}&days=7`);
+                const res = await authFetch(`${API_BASE}/admin/security-stats?days=7`);
                 if (!res.ok) throw new Error('統計取得に失敗しました');
                 
                 const data = await res.json();
@@ -1556,6 +1620,7 @@
                 }
 
                 const data = await res.json();
+                localStorage.setItem('accessToken', data.access_token);
                 localStorage.setItem('userId', data.user_id);
                 localStorage.setItem('username', data.username);
                 localStorage.setItem('userRole', data.role);
@@ -1572,6 +1637,7 @@
         }
 
         function logoutUser() {
+            localStorage.removeItem('accessToken');
             localStorage.removeItem('userId');
             localStorage.removeItem('username');
             localStorage.removeItem('userRole');
@@ -1598,8 +1664,8 @@
         if (userUploadBtn) userUploadBtn.addEventListener('click', async () => {
             const messageDiv = document.getElementById('userUploadMessage');
             messageDiv.innerHTML = '';
-            const userId = localStorage.getItem('userId');
-            if (!userId) { messageDiv.innerHTML = '<div class="message error">ログインが必要です</div>'; return; }
+            const token = localStorage.getItem('accessToken');
+            if (!token) { messageDiv.innerHTML = '<div class="message error">ログインが必要です</div>'; return; }
 
             if (!userCsvFile.files.length) return;
             userUploadBtn.disabled = true; userUploadBtn.textContent = 'アップロード中...';
@@ -1607,8 +1673,8 @@
             try {
                 const formData = new FormData();
                 formData.append('file', userCsvFile.files[0]);
-                console.log('📤 CSV Upload - user_id:', userId, 'file:', userCsvFile.files[0].name);
-                const resp = await fetch(`${API_BASE}/upload?user_id=${userId}`, { method: 'POST', body: formData });
+                console.log('📤 CSV Upload - file:', userCsvFile.files[0].name);
+                const resp = await authFetch(`${API_BASE}/upload`, { method: 'POST', body: formData });
                 const data = await resp.json();
                 console.log('📥 CSV Upload response:', resp.status, data);
                 if (resp.ok) {
@@ -1639,11 +1705,11 @@
             if (!oldPw || !newPw || !confirmPw) { msgDiv.innerHTML = '<p style="color: #e74c3c;">すべてのフィールドを入力してください</p>'; return; }
             if (newPw !== confirmPw) { msgDiv.innerHTML = '<p style="color: #e74c3c;">確認パスワードが一致しません</p>'; return; }
 
-            const userId = localStorage.getItem('userId');
-            if (!userId) { msgDiv.innerHTML = '<p style="color: #e74c3c;">ログインが必要です</p>'; return; }
+            const token = localStorage.getItem('accessToken');
+            if (!token) { msgDiv.innerHTML = '<p style="color: #e74c3c;">ログインが必要です</p>'; return; }
 
             try {
-                const res = await fetch(`${API_BASE}/auth/change-password?user_id=${encodeURIComponent(userId)}`, {
+                const res = await authFetch(`${API_BASE}/auth/change-password`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ old_password: oldPw, new_password: newPw })
@@ -1672,7 +1738,7 @@
                     return;
                 }
                 
-                const response = await fetch(`${API_BASE}/admin/verify-password`, {
+                const response = await authFetch(`${API_BASE}/admin/verify-password`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ password: password })
@@ -1710,7 +1776,7 @@
                     return;
                 }
                 
-                const response = await fetch(`${API_BASE}/admin/change-password`, {
+                const response = await authFetch(`${API_BASE}/admin/change-password`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ old_password: oldPassword, new_password: newPassword })
@@ -1745,7 +1811,7 @@
             }
 
             try {
-                const response = await fetch(`${API_BASE}/admin/clear-data`, {
+                const response = await authFetch(`${API_BASE}/admin/clear-data`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
                 });
@@ -1793,15 +1859,15 @@
                 const queryParam = storeCode ? `?store_code=${storeCode}` : '';
                 console.log(`📊 Loading analysis data${queryParam ? ` for store: ${storeCode}` : ' (all stores)'}`);
                 
-                const dailyResponse = await fetch(`${API_BASE}/summary/daily${queryParam}`);
+                const dailyResponse = await authFetch(`${API_BASE}/summary/daily${queryParam}`);
                 const dailyData = await dailyResponse.json();
                 console.log(`📊 Daily data loaded:`, dailyData);
 
-                const au1DailyResponse = await fetch(`${API_BASE}/au1-collection/daily${queryParam}`);
+                const au1DailyResponse = await authFetch(`${API_BASE}/au1-collection/daily${queryParam}`);
                 const au1DailyData = await au1DailyResponse.json();
                 console.log(`📊 au+1Collection daily data loaded:`, au1DailyData);
 
-                const productResponse = await fetch(`${API_BASE}/summary/product${queryParam}`);
+                const productResponse = await authFetch(`${API_BASE}/summary/product${queryParam}`);
                 const productData = await productResponse.json();
                 console.log(`📊 Product data loaded:`, productData);
 
@@ -1985,7 +2051,7 @@
                 const storeCode = document.getElementById('storeSelect').value;
                 const queryParam = storeCode ? `?store_code=${storeCode}` : '';
                 
-                const response = await fetch(`${API_BASE}/summary/staff-list${queryParam}`);
+                const response = await authFetch(`${API_BASE}/summary/staff-list${queryParam}`);
                 const staffList = await response.json();
                 
                 const select = document.getElementById('staffSelect');
@@ -2011,7 +2077,7 @@
         async function loadStoreList() {
             try {
                 console.log('🔄 loadStoreList() called');
-                const response = await fetch(`${API_BASE}/admin/stores`);
+                const response = await authFetch(`${API_BASE}/admin/stores`);
                 const result = await response.json();
                 const stores = result.data || [];
                 console.log('📍 Stores loaded:', stores);
@@ -2160,10 +2226,10 @@
                 
                 // 並行してデータを読み込み
                 const [summaryResponse, categoryResponse, detailResponse, unitPriceResponse] = await Promise.all([
-                    fetch(summaryUrl),
-                    fetch(categoryUrl),
-                    fetch(detailUrl),
-                    fetch(unitPriceUrl)
+                    authFetch(summaryUrl),
+                    authFetch(categoryUrl),
+                    authFetch(detailUrl),
+                    authFetch(unitPriceUrl)
                 ]);
                 
                 if (!summaryResponse.ok) {
@@ -2554,6 +2620,17 @@
             const logoutBtn = document.getElementById('logoutBtn');
             if (loginBtn) loginBtn.addEventListener('click', loginUser);
             if (logoutBtn) logoutBtn.addEventListener('click', logoutUser);
+
+            // バージョン表示
+            fetch('/api/health')
+                .then(r => r.ok ? r.json() : null)
+                .then(data => {
+                    if (data && data.version) {
+                        const el = document.getElementById('appVersion');
+                        if (el) el.textContent = 'v' + data.version;
+                    }
+                })
+                .catch(() => {});
         });
 
         // newStoreCode ドロップダウンを店舗リストと連携
@@ -2561,7 +2638,7 @@
             const select = document.getElementById('newStoreCode');
             if (!select) return;
             
-            fetch(`${API_BASE}/admin/stores`).then(r => r.json()).then(stores => {
+            authFetch(`${API_BASE}/admin/stores`).then(r => r.json()).then(stores => {
                 select.innerHTML = '<option value="">-- 店舗を選択 --</option>';
                 stores.data.forEach(store => {
                     const opt = document.createElement('option');
@@ -2584,7 +2661,7 @@
                 const storeCode = document.getElementById('storeSelect').value;
                 const queryParam = storeCode ? `?store_code=${storeCode}` : '';
                 
-                const response = await fetch(`${API_BASE}/admin/sales-data${queryParam}`);
+                const response = await authFetch(`${API_BASE}/admin/sales-data${queryParam}`);
                 if (!response.ok) throw new Error('データ取得に失敗しました');
                 
                 const result = await response.json();

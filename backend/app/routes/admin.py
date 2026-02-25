@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from passlib.context import CryptContext
@@ -6,6 +6,7 @@ from app.database import get_db
 from app.models.admin import AdminUser
 from app.models.sales import SalesTransaction
 from app.models.store import Store
+from app.utils.jwt_auth import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -32,23 +33,22 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 @router.post("/verify-password")
-async def verify_password_endpoint(data: AdminLogin, db: Session = Depends(get_db)):
+async def verify_password_endpoint(data: AdminLogin, current_user=Depends(require_admin), db: Session = Depends(get_db)):
     """管理者パスワードを検証"""
     admin = db.query(AdminUser).filter(AdminUser.username == "admin").first()
     
     if not admin:
-        # デフォルトパスワードで初期化
+        # ランダムな初期パスワードで初期化（admin123 ハードコードを廃止）
+        import secrets, string
+        alphabet = string.ascii_letters + string.digits
+        init_pw = ''.join(secrets.choice(alphabet) for _ in range(16))
         default_admin = AdminUser(
             username="admin",
-            password_hash=hash_password("admin123")
+            password_hash=hash_password(init_pw)
         )
         db.add(default_admin)
         db.commit()
-        
-        if verify_password(data.password, default_admin.password_hash):
-            return {"success": True, "message": "ログインしました"}
-        else:
-            raise HTTPException(status_code=401, detail="パスワードが正しくありません")
+        raise HTTPException(status_code=401, detail="パスワードが正しくありません")
     
     if verify_password(data.password, admin.password_hash):
         return {"success": True, "message": "ログインしました"}
@@ -56,7 +56,7 @@ async def verify_password_endpoint(data: AdminLogin, db: Session = Depends(get_d
         raise HTTPException(status_code=401, detail="パスワードが正しくありません")
 
 @router.post("/change-password")
-async def change_password_endpoint(data: AdminChangePassword, db: Session = Depends(get_db)):
+async def change_password_endpoint(data: AdminChangePassword, current_user=Depends(require_admin), db: Session = Depends(get_db)):
     """管理者パスワードを変更"""
     admin = db.query(AdminUser).filter(AdminUser.username == "admin").first()
     
@@ -72,7 +72,7 @@ async def change_password_endpoint(data: AdminChangePassword, db: Session = Depe
     return {"success": True, "message": "パスワードを変更しました"}
 
 @router.get("/sales-data")
-async def get_sales_data(db: Session = Depends(get_db), store_code: str = None):
+async def get_sales_data(current_user=Depends(require_admin), db: Session = Depends(get_db), store_code: str = None):
     """すべての売上データを取得"""
     try:
         from sqlalchemy.orm import joinedload
@@ -116,7 +116,7 @@ async def get_sales_data(db: Session = Depends(get_db), store_code: str = None):
         raise HTTPException(status_code=500, detail=f"データ取得エラー: {str(e)}")
 
 @router.post("/clear-data")
-async def clear_data_endpoint(db: Session = Depends(get_db)):
+async def clear_data_endpoint(current_user=Depends(require_admin), db: Session = Depends(get_db)):
     """すべての売上データをクリア"""
     try:
         # 全トランザクションを削除
@@ -133,7 +133,7 @@ async def clear_data_endpoint(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"データ削除エラー: {str(e)}")
 
 @router.get("/stores")
-async def get_stores(db: Session = Depends(get_db)):
+async def get_stores(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     """店舗一覧を取得"""
     try:
         stores = db.query(Store).all()
@@ -151,7 +151,7 @@ async def get_stores(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"店舗取得エラー: {str(e)}")
 
 @router.post("/stores")
-async def create_store(store: StoreCreate, db: Session = Depends(get_db)):
+async def create_store(store: StoreCreate, current_user=Depends(require_admin), db: Session = Depends(get_db)):
     """新規店舗を追加"""
     try:
         # 重複チェック
@@ -183,7 +183,7 @@ async def create_store(store: StoreCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"店舗追加エラー: {str(e)}")
 
 @router.delete("/delete-store")
-async def delete_store(store_id: int, admin_user_id: int = None, db: Session = Depends(get_db)):
+async def delete_store(request: Request, store_id: int, current_user=Depends(require_admin), db: Session = Depends(get_db)):
     """店舗を削除"""
     try:
         store = db.query(Store).filter(Store.id == store_id).first()
@@ -193,19 +193,21 @@ async def delete_store(store_id: int, admin_user_id: int = None, db: Session = D
         # 監査ログに記録
         try:
             from app.models.audit_log import AuditLog
+            from app.utils.audit_logger import log_event
             from datetime import datetime
-            log_entry = AuditLog(
+            log_event(
                 event_type='store_deleted',
-                user_id=admin_user_id or 0,
-                username='admin',
-                ip_address='127.0.0.1',
-                status='success',
-                details=f"店舗削除: {store.store_code} ({store.store_name})",
-                timestamp=datetime.utcnow()
+                ip_address=request.client.host if request.client else 'unknown',
+                user_id=current_user.id,
+                username=current_user.username,
+                resource=f'/admin/delete-store',
+                action='DELETE',
+                details={"store_code": store.store_code, "store_name": store.store_name},
+                success=True,
+                status_code=200
             )
-            db.add(log_entry)
-        except:
-            pass  # 監査ログの記録に失敗しても続行
+        except Exception as log_err:
+            print(f"Warning: audit log failed: {log_err}")
         
         db.delete(store)
         db.commit()

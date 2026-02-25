@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
 from app.models.audit_log import AuditLog
+from app.utils.jwt_auth import require_admin
 from datetime import datetime, timedelta
 from typing import List
 
@@ -11,21 +12,13 @@ router = APIRouter(prefix="/api", tags=["audit"])
 @router.get("/admin/security-logs")
 async def get_security_logs(
     request: Request,
-    admin_user_id: int = Query(None),
+    current_user=Depends(require_admin),
     event_type: str = Query(None),
-    days: int = Query(7),
-    limit: int = Query(500),
+    days: int = Query(7, ge=1, le=90),
+    limit: int = Query(500, ge=1, le=1000),
     db: Session = Depends(get_db)
 ):
     """セキュリティログを取得（管理者のみ）"""
-    if not admin_user_id:
-        raise HTTPException(status_code=401, detail="ログインが必要です")
-    
-    # 管理者ユーザーであることを確認
-    admin = db.query(User).filter(User.id == admin_user_id).first()
-    if not admin or admin.role != "admin":
-        raise HTTPException(status_code=403, detail="管理者権限がありません")
-    
     # ログイン情報からIPアドレスとユーザーエージェントを取得
     ip_address = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "unknown")
@@ -35,8 +28,8 @@ async def get_security_logs(
     log_event(
         event_type="security_logs_accessed",
         ip_address=ip_address,
-        user_id=admin_user_id,
-        username=admin.username,
+        user_id=current_user.id,
+        username=current_user.username,
         user_agent=user_agent,
         resource="/admin/security-logs",
         action="GET",
@@ -80,18 +73,11 @@ async def get_security_logs(
 
 @router.get("/admin/security-stats")
 async def get_security_stats(
-    admin_user_id: int = Query(None),
+    current_user=Depends(require_admin),
     days: int = Query(7),
     db: Session = Depends(get_db)
 ):
     """セキュリティ統計を取得（管理者のみ）"""
-    if not admin_user_id:
-        raise HTTPException(status_code=401, detail="ログインが必要です")
-    
-    # 管理者ユーザーであることを確認
-    admin = db.query(User).filter(User.id == admin_user_id).first()
-    if not admin or admin.role != "admin":
-        raise HTTPException(status_code=403, detail="管理者権限がありません")
     
     cutoff_date = datetime.utcnow() - timedelta(days=days)
     
@@ -143,17 +129,10 @@ async def get_security_stats(
 async def delete_security_log(
     log_id: int,
     request: Request,
-    admin_user_id: int = Query(None),
+    current_user=Depends(require_admin),
     db: Session = Depends(get_db)
 ):
     """セキュリティログを削除（管理者のみ）"""
-    if not admin_user_id:
-        raise HTTPException(status_code=401, detail="ログインが必要です")
-    
-    # 管理者ユーザーであることを確認
-    admin = db.query(User).filter(User.id == admin_user_id).first()
-    if not admin or admin.role != "admin":
-        raise HTTPException(status_code=403, detail="管理者権限がありません")
     
     # ログを取得して削除
     log = db.query(AuditLog).filter(AuditLog.id == log_id).first()
@@ -171,8 +150,8 @@ async def delete_security_log(
     log_event(
         event_type="security_log_deleted",
         ip_address=ip_address,
-        user_id=admin_user_id,
-        username=admin.username,
+        user_id=current_user.id,
+        username=current_user.username,
         user_agent=user_agent,
         resource=f"/admin/security-logs/{log_id}",
         action="DELETE",
@@ -186,17 +165,10 @@ async def delete_security_log(
 @router.delete("/admin/security-logs-all")
 async def clear_all_security_logs(
     request: Request,
-    admin_user_id: int = Query(None),
+    current_user=Depends(require_admin),
     db: Session = Depends(get_db)
 ):
     """すべてのセキュリティログを削除（管理者のみ）"""
-    if not admin_user_id:
-        raise HTTPException(status_code=401, detail="ログインが必要です")
-    
-    # 管理者ユーザーであることを確認
-    admin = db.query(User).filter(User.id == admin_user_id).first()
-    if not admin or admin.role != "admin":
-        raise HTTPException(status_code=403, detail="管理者権限がありません")
     
     # すべてのログを取得して削除数をカウント
     logs = db.query(AuditLog).all()
@@ -214,8 +186,8 @@ async def clear_all_security_logs(
     log_event(
         event_type="security_logs_cleared",
         ip_address=ip_address,
-        user_id=admin_user_id,
-        username=admin.username,
+        user_id=current_user.id,
+        username=current_user.username,
         user_agent=user_agent,
         resource="/admin/security-logs",
         action="DELETE_ALL",

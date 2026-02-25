@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models.user import User
 from app.utils.rate_limiter import login_limiter
 from app.utils.audit_logger import log_event
+from app.utils.jwt_auth import create_access_token, get_current_user, require_admin
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -19,9 +20,24 @@ class UserLogin(BaseModel):
     username: str
     password: str
 
+def _validate_password_strength(password: str) -> str:
+    """パスワード強度を検証する共通バリデーター"""
+    if len(password) < 8:
+        raise ValueError("パスワードは8文字以上にしてください")
+    if not any(c.isdigit() for c in password):
+        raise ValueError("パスワードには数字を1文字以上含めてください")
+    if not any(c.isalpha() for c in password):
+        raise ValueError("パスワードには英字を1文字以上含めてください")
+    return password
+
 class UserChangePassword(BaseModel):
     old_password: str
     new_password: str
+
+    @field_validator('new_password')
+    @classmethod
+    def validate_new_password(cls, v):
+        return _validate_password_strength(v)
 
 class UserCreate(BaseModel):
     username: str
@@ -30,7 +46,12 @@ class UserCreate(BaseModel):
     staff_name: str
     store_code: str
     role: str = "user"  # 'admin', 'manager', または 'user'
-    
+
+    @field_validator('password')
+    @classmethod
+    def validate_password(cls, v):
+        return _validate_password_strength(v)
+
     @field_validator('role')
     @classmethod
     def validate_role(cls, v):
@@ -109,8 +130,12 @@ async def login(request: Request, data: UserLogin, db: Session = Depends(get_db)
         status_code=200
     )
     
+    access_token = create_access_token({"sub": str(user.id)})
+
     return {
         "success": True,
+        "access_token": access_token,
+        "token_type": "bearer",
         "user_id": user.id,
         "username": user.username,
         "staff_name": user.staff_name,
@@ -124,35 +149,20 @@ async def logout():
     return {"success": True, "message": "ログアウトしました"}
 
 @router.post("/change-password")
-async def change_password(data: UserChangePassword, user_id: int = Query(None), db: Session = Depends(get_db)):
+async def change_password(data: UserChangePassword, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     """パスワード変更（一般ユーザー用）"""
-    if not user_id:
-        raise HTTPException(status_code=401, detail="ログインが必要です")
-    
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
-    
-    if not verify_password(data.old_password, user.password_hash):
+    if not verify_password(data.old_password, current_user.password_hash):
         raise HTTPException(status_code=401, detail="現在のパスワードが正しくありません")
     
-    user.password_hash = hash_password(data.new_password)
-    user.updated_at = datetime.utcnow()
+    current_user.password_hash = hash_password(data.new_password)
+    current_user.updated_at = datetime.utcnow()
     db.commit()
     
     return {"success": True, "message": "パスワードを変更しました"}
 
 @router.post("/admin/create-user")
-async def create_user(data: UserCreate, admin_user_id: int = Query(None), db: Session = Depends(get_db)):
-    """ユーザー作成（特権ユーザー用）"""
-    if not admin_user_id:
-        raise HTTPException(status_code=401, detail="ログインが必要です")
-    
-    # 管理者ユーザーであることを確認
-    admin = db.query(User).filter(User.id == admin_user_id).first()
-    if not admin or admin.role != "admin":
-        raise HTTPException(status_code=403, detail="管理者権限がありません")
-    
+async def create_user(data: UserCreate, current_user=Depends(require_admin), db: Session = Depends(get_db)):
+    """ユーザー作成（管理者用）"""
     # ユーザーが既に存在するか確認
     existing = db.query(User).filter(User.username == data.username).first()
     if existing:
@@ -179,36 +189,24 @@ async def create_user(data: UserCreate, admin_user_id: int = Query(None), db: Se
     }
 
 @router.post("/admin/reset-password")
-async def reset_password(request: Request, data: UserReset, admin_user_id: int = Query(None), db: Session = Depends(get_db)):
-    """パスワードリセット（特権ユーザー用）"""
+async def reset_password(request: Request, data: UserReset, current_user=Depends(require_admin), db: Session = Depends(get_db)):
+    """パスワードリセット（管理者用）"""
     ip_address = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "unknown")
-    
-    if not admin_user_id:
-        raise HTTPException(status_code=401, detail="ログインが必要です")
-    
-    # 管理者ユーザーであることを確認
-    admin = db.query(User).filter(User.id == admin_user_id).first()
-    if not admin or admin.role != "admin":
-        log_event(
-            event_type="unauthorized_admin_access",
-            ip_address=ip_address,
-            user_id=admin_user_id,
-            user_agent=user_agent,
-            resource="/auth/admin/reset-password",
-            action="POST",
-            success=False,
-            status_code=403
-        )
-        raise HTTPException(status_code=403, detail="管理者権限がありません")
-    
+
     # ユーザーを取得
     user = db.query(User).filter(User.username == data.username).first()
     if not user:
         raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
     
-    # デフォルトパスワードにリセット
-    default_password = "password123"
+    # ランダムな初期パスワードを生成（英字 + 数字 各4文字ずつ = 8文字）
+    import secrets, string
+    alphabet = string.ascii_letters + string.digits
+    while True:
+        default_password = ''.join(secrets.choice(alphabet) for _ in range(12))
+        # 英字と数字が両方含まれることを保証
+        if any(c.isalpha() for c in default_password) and any(c.isdigit() for c in default_password):
+            break
     user.password_hash = hash_password(default_password)
     user.updated_at = datetime.utcnow()
     db.commit()
@@ -216,8 +214,8 @@ async def reset_password(request: Request, data: UserReset, admin_user_id: int =
     log_event(
         event_type="password_reset",
         ip_address=ip_address,
-        user_id=admin_user_id,
-        username=admin.username,
+        user_id=current_user.id,
+        username=current_user.username,
         user_agent=user_agent,
         resource=f"/auth/admin/reset-password",
         action="POST",
@@ -229,21 +227,13 @@ async def reset_password(request: Request, data: UserReset, admin_user_id: int =
     return {
         "success": True,
         "message": f"パスワードをリセットしました",
-        "default_password": default_password,
+        "temporary_password": default_password,
         "username": user.username
     }
 
 @router.get("/admin/users")
-async def list_users(admin_user_id: int = Query(None), db: Session = Depends(get_db)):
-    """ユーザー一覧を取得（特権ユーザー用）"""
-    if not admin_user_id:
-        raise HTTPException(status_code=401, detail="ログインが必要です")
-    
-    # 管理者ユーザーであることを確認
-    admin = db.query(User).filter(User.id == admin_user_id).first()
-    if not admin or admin.role != "admin":
-        raise HTTPException(status_code=403, detail="管理者権限がありません")
-    
+async def list_users(current_user=Depends(require_admin), db: Session = Depends(get_db)):
+    """ユーザー一覧を取得（管理者用）"""
     users = db.query(User).all()
     return [
         {
@@ -259,41 +249,23 @@ async def list_users(admin_user_id: int = Query(None), db: Session = Depends(get
     ]
 
 @router.delete("/admin/users/{username}")
-async def delete_user(request: Request, username: str, admin_user_id: int = Query(None), db: Session = Depends(get_db)):
-    """ユーザーを削除（特権ユーザー用）"""
+async def delete_user(request: Request, username: str, current_user=Depends(require_admin), db: Session = Depends(get_db)):
+    """ユーザーを削除（管理者用）"""
     ip_address = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "unknown")
-    
-    if not admin_user_id:
-        raise HTTPException(status_code=401, detail="ログインが必要です")
-    
-    # 管理者ユーザーであることを確認
-    admin = db.query(User).filter(User.id == admin_user_id).first()
-    if not admin or admin.role != "admin":
-        log_event(
-            event_type="unauthorized_admin_access",
-            ip_address=ip_address,
-            user_id=admin_user_id,
-            user_agent=user_agent,
-            resource=f"/auth/admin/users/{username}",
-            action="DELETE",
-            success=False,
-            status_code=403
-        )
-        raise HTTPException(status_code=403, detail="管理者権限がありません")
-    
+
     # ユーザーを取得
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
     
     # 管理者自身は削除不可
-    if user.id == admin_user_id:
+    if user.id == current_user.id:
         log_event(
             event_type="user_delete_failure",
             ip_address=ip_address,
-            user_id=admin_user_id,
-            username=admin.username,
+            user_id=current_user.id,
+            username=current_user.username,
             user_agent=user_agent,
             resource=f"/auth/admin/users/{username}",
             action="DELETE",
@@ -310,8 +282,8 @@ async def delete_user(request: Request, username: str, admin_user_id: int = Quer
     log_event(
         event_type="user_deleted",
         ip_address=ip_address,
-        user_id=admin_user_id,
-        username=admin.username,
+        user_id=current_user.id,
+        username=current_user.username,
         user_agent=user_agent,
         resource=f"/auth/admin/users/{username}",
         action="DELETE",
@@ -327,41 +299,34 @@ async def delete_user(request: Request, username: str, admin_user_id: int = Quer
 
 class UserUpdate(BaseModel):
     staff_name: str = None
+    store_code: str = None
 
 @router.put("/admin/users/{username}")
-async def update_user(request: Request, username: str, data: UserUpdate, admin_user_id: int = Query(None), db: Session = Depends(get_db)):
-    """ユーザー情報を更新（特権ユーザー用）"""
+async def update_user(request: Request, username: str, data: UserUpdate, current_user=Depends(require_admin), db: Session = Depends(get_db)):
+    """ユーザー情報を更新（管理者用）"""
     ip_address = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "unknown")
-    
-    if not admin_user_id:
-        raise HTTPException(status_code=401, detail="ログインが必要です")
-    
-    # 管理者ユーザーであることを確認
-    admin = db.query(User).filter(User.id == admin_user_id).first()
-    if not admin or admin.role != "admin":
-        log_event(
-            event_type="unauthorized_admin_access",
-            ip_address=ip_address,
-            user_id=admin_user_id,
-            user_agent=user_agent,
-            resource=f"/auth/admin/users/{username}",
-            action="PUT",
-            success=False,
-            status_code=403
-        )
-        raise HTTPException(status_code=403, detail="管理者権限がありません")
-    
+
     # ユーザーを取得
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
     
     old_staff_name = user.staff_name
-    
+    old_store_code = user.store_code
+    changed = {}
+
     # スタッフ名を更新
     if data.staff_name is not None:
         user.staff_name = data.staff_name
+        changed["staff_name"] = {"old": old_staff_name, "new": data.staff_name}
+
+    # 店舗コードを更新
+    if data.store_code is not None:
+        user.store_code = data.store_code
+        changed["store_code"] = {"old": old_store_code, "new": data.store_code}
+
+    if changed:
         user.updated_at = datetime.utcnow()
     
     db.commit()
@@ -369,16 +334,12 @@ async def update_user(request: Request, username: str, data: UserUpdate, admin_u
     log_event(
         event_type="user_updated",
         ip_address=ip_address,
-        user_id=admin_user_id,
-        username=admin.username,
+        user_id=current_user.id,
+        username=current_user.username,
         user_agent=user_agent,
         resource=f"/auth/admin/users/{username}",
         action="PUT",
-        details={
-            "target_user": username,
-            "old_staff_name": old_staff_name,
-            "new_staff_name": data.staff_name
-        },
+        details={"target_user": username, **changed},
         success=True,
         status_code=200
     )
@@ -386,5 +347,6 @@ async def update_user(request: Request, username: str, data: UserUpdate, admin_u
     return {
         "success": True,
         "message": f"ユーザー '{username}' を更新しました",
-        "staff_name": user.staff_name
+        "staff_name": user.staff_name,
+        "store_code": user.store_code
     }
