@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 import threading
 
@@ -30,7 +30,7 @@ def log_event(
             
             try:
                 log = AuditLog(
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                     event_type=event_type,
                     user_id=user_id,
                     username=username,

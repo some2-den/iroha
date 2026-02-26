@@ -7,6 +7,7 @@ import os
 from app.config import DEBUG, CORS_ORIGINS, VERSION
 from app.database import engine, Base
 from app.routes import sales, health, admin, auth, audit
+from app.utils.rate_limiter import api_limiter
 # モデルをインポート（テーブル作成のため）
 from app.models.sales import SalesTransaction
 from app.models.user import User
@@ -69,9 +70,33 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "font-src 'self'; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none';"
+        )
         if not DEBUG:
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
+
+
+# API全体レート制限ミドルウェア（IP単位: 1分間に100リクエストまで）
+class APIRateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path.startswith("/api/"):
+            ip_address = request.client.host if request.client else "unknown"
+            if not api_limiter.is_allowed(ip_address):
+                remaining = api_limiter.get_remaining_time(ip_address)
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": f"リクエスト数が多すぎます。{remaining}秒後に再試行してください"}
+                )
+        return await call_next(request)
 
 # DEBUGモード時のみドキュメントエンドポイントを公開
 app = FastAPI(
@@ -85,6 +110,7 @@ app = FastAPI(
 
 # セキュリティヘッダーミドルウェア（CORSより前に登録）
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(APIRateLimitMiddleware)
 
 # CORS設定
 app.add_middleware(

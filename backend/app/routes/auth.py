@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, Field
 from passlib.context import CryptContext
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from app.database import get_db
 from app.models.user import User
 from app.utils.rate_limiter import login_limiter
@@ -17,8 +17,8 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # スキーマ
 class UserLogin(BaseModel):
-    username: str
-    password: str
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=128)
 
 def _validate_password_strength(password: str) -> str:
     """パスワード強度を検証する共通バリデーター"""
@@ -40,12 +40,12 @@ class UserChangePassword(BaseModel):
         return _validate_password_strength(v)
 
 class UserCreate(BaseModel):
-    username: str
-    password: str
-    staff_id: str
-    staff_name: str
-    store_code: str
-    role: str = "user"  # 'admin', 'manager', または 'user'
+    username: str = Field(..., min_length=3, max_length=64)
+    password: str = Field(..., min_length=8, max_length=128)
+    staff_id: str = Field(..., max_length=64)
+    staff_name: str = Field(..., max_length=128)
+    store_code: str = Field(..., max_length=32)
+    role: str = Field(default="user")  # 'admin', 'manager', または 'user'
 
     @field_validator('password')
     @classmethod
@@ -155,7 +155,7 @@ async def change_password(data: UserChangePassword, current_user=Depends(get_cur
         raise HTTPException(status_code=401, detail="現在のパスワードが正しくありません")
     
     current_user.password_hash = hash_password(data.new_password)
-    current_user.updated_at = datetime.utcnow()
+    current_user.updated_at = datetime.now(timezone.utc)
     db.commit()
     
     return {"success": True, "message": "パスワードを変更しました"}
@@ -208,7 +208,7 @@ async def reset_password(request: Request, data: UserReset, current_user=Depends
         if any(c.isalpha() for c in default_password) and any(c.isdigit() for c in default_password):
             break
     user.password_hash = hash_password(default_password)
-    user.updated_at = datetime.utcnow()
+    user.updated_at = datetime.now(timezone.utc)
     db.commit()
     
     log_event(
@@ -327,7 +327,7 @@ async def update_user(request: Request, username: str, data: UserUpdate, current
         changed["store_code"] = {"old": old_store_code, "new": data.store_code}
 
     if changed:
-        user.updated_at = datetime.utcnow()
+        user.updated_at = datetime.now(timezone.utc)
     
     db.commit()
     

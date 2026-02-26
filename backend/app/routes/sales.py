@@ -133,18 +133,23 @@ async def upload_csv(file: UploadFile = File(...), current_user=Depends(get_curr
             "duplicates": duplicate_count,
             "filtered_out": filtered_out_count
         }
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         print(f"❌ CSV Upload Error: {str(e)}")
         print(f"Error traceback: {traceback.format_exc()}")
         db.rollback()
-        error_detail = f"{type(e).__name__}: {str(e)}"
-        raise HTTPException(status_code=400, detail=error_detail)
+        raise HTTPException(status_code=400, detail="CSVファイルの処理中にエラーが発生しました。ファイル形式を確認してください")
 
 @router.get("/transactions", response_model=List[SalesTransactionRead])
 def get_transactions(current_user=Depends(get_current_user), db: Session = Depends(get_db), skip: int = 0, limit: int = 100):
     """販売トランザクション一覧を取得"""
-    transactions = db.query(SalesTransaction).offset(skip).limit(limit).all()
+    query = db.query(SalesTransaction)
+    # 非adminユーザーは自身の店舗のデータのみに制限
+    if current_user.role != 'admin':
+        query = query.filter(SalesTransaction.store_code == current_user.store_code)
+    transactions = query.offset(skip).limit(limit).all()
     return transactions
 
 @router.get("/summary/daily")

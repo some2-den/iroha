@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from passlib.context import CryptContext
 from app.database import get_db
 from app.models.admin import AdminUser
@@ -14,17 +14,26 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class AdminLogin(BaseModel):
-    password: str
+    password: str = Field(..., min_length=1, max_length=128)
 
 class AdminChangePassword(BaseModel):
-    old_password: str
-    new_password: str
+    old_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator('new_password')
+    @classmethod
+    def validate_new_password(cls, v):
+        if not any(c.isdigit() for c in v):
+            raise ValueError("パスワードには数字を1文字以上含めてください")
+        if not any(c.isalpha() for c in v):
+            raise ValueError("パスワードには英字を1文字以上含めてください")
+        return v
 
 class StoreCreate(BaseModel):
-    store_code: str
-    store_name: str
-    location: str
-    phone: str = None
+    store_code: str = Field(..., min_length=1, max_length=32)
+    store_name: str = Field(..., min_length=1, max_length=128)
+    location: str = Field(default="", max_length=256)
+    phone: str = Field(default=None, max_length=32)
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
@@ -113,7 +122,8 @@ async def get_sales_data(current_user=Depends(require_admin), db: Session = Depe
             })
         return {"data": result, "count": len(result)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"データ取得エラー: {str(e)}")
+        print(f"[ERROR] /admin/sales-data: {e}")
+        raise HTTPException(status_code=500, detail="データ取得中にエラーが発生しました")
 
 @router.post("/clear-data")
 async def clear_data_endpoint(current_user=Depends(require_admin), db: Session = Depends(get_db)):
@@ -130,7 +140,8 @@ async def clear_data_endpoint(current_user=Depends(require_admin), db: Session =
         }
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"データ削除エラー: {str(e)}")
+        print(f"[ERROR] /admin/clear-data: {e}")
+        raise HTTPException(status_code=500, detail="データ削除中にエラーが発生しました")
 
 @router.get("/stores")
 async def get_stores(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
@@ -148,7 +159,8 @@ async def get_stores(current_user=Depends(get_current_user), db: Session = Depen
             })
         return {"data": result, "count": len(result)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"店舗取得エラー: {str(e)}")
+        print(f"[ERROR] /admin/stores GET: {e}")
+        raise HTTPException(status_code=500, detail="店舗情報の取得中にエラーが発生しました")
 
 @router.post("/stores")
 async def create_store(store: StoreCreate, current_user=Depends(require_admin), db: Session = Depends(get_db)):
@@ -180,7 +192,8 @@ async def create_store(store: StoreCreate, current_user=Depends(require_admin), 
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"店舗追加エラー: {str(e)}")
+        print(f"[ERROR] /admin/stores POST: {e}")
+        raise HTTPException(status_code=500, detail="店舗追加中にエラーが発生しました")
 
 @router.delete("/delete-store")
 async def delete_store(request: Request, store_id: int, current_user=Depends(require_admin), db: Session = Depends(get_db)):
@@ -217,4 +230,5 @@ async def delete_store(request: Request, store_id: int, current_user=Depends(req
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"店舗削除エラー: {str(e)}")
+        print(f"[ERROR] /admin/delete-store: {e}")
+        raise HTTPException(status_code=500, detail="店舗削除中にエラーが発生しました")

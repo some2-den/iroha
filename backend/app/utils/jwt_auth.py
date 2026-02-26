@@ -3,19 +3,14 @@ JWT認証ユーティリティ
 Bearer Tokenによる認証・認可の依存関係を提供する
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from app.database import get_db
-import os
-
-# シークレットキー（本番環境では必ず環境変数で上書きすること）
-SECRET_KEY = os.getenv("SECRET_KEY", "change-this-secret-key-in-production-32chars")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_HOURS = 8
+from app.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_HOURS
 
 security = HTTPBearer()
 
@@ -23,7 +18,7 @@ security = HTTPBearer()
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """JWTアクセストークンを生成する"""
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS))
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 

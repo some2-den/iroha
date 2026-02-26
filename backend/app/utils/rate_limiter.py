@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 import threading
 
@@ -12,7 +12,7 @@ class RateLimiter:
     
     def is_allowed(self, identifier: str) -> bool:
         """リクエストが許可されているか確認"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         with self.lock:
             # 期限切れの試行を削除
@@ -37,7 +37,7 @@ class RateLimiter:
         
         oldest_attempt = self.attempts[identifier][0]
         cutoff_time = oldest_attempt + timedelta(seconds=self.window_seconds)
-        remaining = (cutoff_time - datetime.utcnow()).total_seconds()
+        remaining = (cutoff_time - datetime.now(timezone.utc)).total_seconds()
         return max(0, int(remaining))
 
 # グローバルレート制限インスタンス

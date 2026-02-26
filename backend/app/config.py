@@ -1,10 +1,11 @@
 import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # アプリケーションバージョン
-VERSION = "beta-1.6.8"
+VERSION = "beta-1.6.8.2"
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sales.db")
 # 本番環境では必ず環境変数 DEBUG=false を設定すること
@@ -16,7 +17,18 @@ CORS_ORIGINS = _cors_env.split(",") if _cors_env else []
 
 # JWT認証設定
 # 本番環境では必ず環境変数 SECRET_KEY に長いランダム文字列を設定すること
-SECRET_KEY = os.getenv("SECRET_KEY", "change-this-secret-key-in-production-32chars")
+_DEFAULT_SECRET_KEY = "change-this-secret-key-in-production-32chars"
+SECRET_KEY = os.getenv("SECRET_KEY", _DEFAULT_SECRET_KEY)
+
+# 本番環境でデフォルトキーのまま起動しようとした場合は起動を拒否
+if not DEBUG and SECRET_KEY == _DEFAULT_SECRET_KEY:
+    print(
+        "[SECURITY ERROR] 本番環境 (DEBUG=false) でデフォルトの SECRET_KEY が使用されています。"
+        "環境変数 SECRET_KEY に安全なランダム文字列を設定してください。",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 8
 
