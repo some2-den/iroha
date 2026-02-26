@@ -66,6 +66,8 @@ JWT認証・セキュリティヘッダー・監査ログを備えた本番運�
 │       └── App.tsx
 ├── setup.bat                   # Windows セットアップスクリプト
 ├── run.bat                     # Windows 起動スクリプト
+├── setup.sh                    # Linux/macOS セットアップスクリプト
+├── run.sh                      # Linux/macOS 起動スクリプト
 └── README.md
 ```
 
@@ -85,9 +87,14 @@ JWT認証・セキュリティヘッダー・監査ログを備えた本番運�
 setup.bat
 ```
 
+**Linux/macOS:**
+```bash
+chmod +x setup.sh run.sh
+./setup.sh
+```
+
 スクリプトが以下を自動実行します：
 - Python バージョン確認
-- 仮想環境（`.venv`）作成
 - 依存パッケージインストール
 - `backend/.env` ファイル作成
 
@@ -98,6 +105,11 @@ setup.bat
 **Windows:**
 ```bat
 copy backend\.env.example backend\.env
+```
+
+**Linux/macOS:**
+```bash
+cp backend/.env.example backend/.env
 ```
 
 `backend/.env` を開き、最低限 `SECRET_KEY` を設定してください：
@@ -123,10 +135,15 @@ python -c "import secrets; print(secrets.token_hex(32))"
 run.bat
 ```
 
+**Linux/macOS:**
+```bash
+./run.sh
+```
+
 または直接起動：
 ```bash
 cd backend
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 10168
 ```
 
 ブラウザで `http://localhost:8000` にアクセスしてください。
