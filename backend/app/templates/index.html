@@ -1085,7 +1085,10 @@
                     document.getElementById('newStoreCode').value = '';
                     setTimeout(() => loadUserList(), 800);
                 } else {
-                    msgDiv.innerHTML = `<div class="message error">✗ ${data.detail}</div>`;
+                    const errorMsg = Array.isArray(data.detail)
+                        ? data.detail.map(e => e.msg || JSON.stringify(e)).join(' / ')
+                        : (data.detail || 'エラーが発生しました');
+                    msgDiv.innerHTML = `<div class="message error">✗ ${errorMsg}</div>`;
                 }
             } catch (error) {
                 console.error('ユーザー作成エラー:', error);
@@ -2440,11 +2443,42 @@
         }
 
         function renderAu1CategoryPieCharts(data) {
+            const profitCanvas = document.getElementById('categoryProfitChart');
+            const salesCanvas = document.getElementById('categorySalesChart');
+
             if (!data || data.length === 0) {
-                document.getElementById('categoryProfitChart').parentElement.innerHTML = '<p style="color: #666;">データがありません</p>';
+                // canvas要素は残したまま非表示にし、メッセージを別要素で表示する
+                if (profitCanvas) profitCanvas.style.display = 'none';
+                if (salesCanvas) salesCanvas.style.display = 'none';
+                ['categoryProfitChart', 'categorySalesChart'].forEach(id => {
+                    const msgId = id + '_nodata';
+                    if (!document.getElementById(msgId)) {
+                        const canvas = document.getElementById(id);
+                        if (canvas) {
+                            const p = document.createElement('p');
+                            p.id = msgId;
+                            p.style.color = '#666';
+                            p.textContent = 'データがありません';
+                            canvas.parentElement.appendChild(p);
+                        }
+                    }
+                });
                 return;
             }
-            
+
+            // データがある場合：canvasを再表示し、メッセージを削除
+            if (profitCanvas) profitCanvas.style.display = '';
+            if (salesCanvas) salesCanvas.style.display = '';
+            ['categoryProfitChart_nodata', 'categorySalesChart_nodata'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.remove();
+            });
+
+            if (!profitCanvas || !salesCanvas) {
+                console.error('円グラフのcanvas要素が見つかりません');
+                return;
+            }
+
             // 中分類別に粗利と売上を集計
             const categoryData = {};
             data.forEach(item => {
@@ -2468,7 +2502,7 @@
             
             try {
                 // 粗利円グラフ
-                const profitCtx = document.getElementById('categoryProfitChart').getContext('2d');
+                const profitCtx = profitCanvas.getContext('2d');
                 if (window.categoryProfitChartInstance && typeof window.categoryProfitChartInstance.destroy === 'function') {
                     window.categoryProfitChartInstance.destroy();
                 }
@@ -2507,7 +2541,7 @@
                 });
                 
                 // 売上円グラフ
-                const salesCtx = document.getElementById('categorySalesChart').getContext('2d');
+                const salesCtx = salesCanvas.getContext('2d');
                 if (window.categorySalesChartInstance && typeof window.categorySalesChartInstance.destroy === 'function') {
                     window.categorySalesChartInstance.destroy();
                 }
