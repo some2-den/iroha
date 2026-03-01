@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # アプリケーションバージョン
-VERSION = "beta-1.6.8.6"
+VERSION = "beta-1.6.8.6-1"
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sales.db")
 # 本番環境では必ず環境変数 DEBUG=false を設定すること

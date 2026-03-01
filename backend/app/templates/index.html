@@ -316,7 +316,24 @@
         <div id="dashboard" class="tab-content active">
             <div class="container">
                 <h2>ダッシュボード</h2>
-                
+
+                <!-- 期間フィルター -->
+                <div style="margin-bottom: 24px; padding: 16px; background-color: #f9f9f9; border-radius: 8px; display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;">
+                    <div>
+                        <label for="dashboardStartDateInput" style="display: block; font-size: 13px; color: #555; margin-bottom: 4px;">開始日</label>
+                        <input type="date" id="dashboardStartDateInput" style="padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px;">
+                    </div>
+                    <div>
+                        <label for="dashboardEndDateInput" style="display: block; font-size: 13px; color: #555; margin-bottom: 4px;">終了日</label>
+                        <input type="date" id="dashboardEndDateInput" style="padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px;">
+                    </div>
+                    <button class="upload-button" onclick="setDashboardCurrentMonth()" style="padding: 8px 14px; font-size: 14px;">当月</button>
+                    <button class="upload-button" onclick="setDashboardPrevMonth()" style="padding: 8px 14px; font-size: 14px; background-color: #7f8c8d;">先月</button>
+                    <button class="upload-button" onclick="setDashboard3Months()" style="padding: 8px 14px; font-size: 14px; background-color: #7f8c8d;">過去3ヶ月</button>
+                    <button class="upload-button" onclick="loadDashboardStats()" style="padding: 8px 14px; font-size: 14px; background-color: #27ae60;">🔍 検索</button>
+                    <span id="dashboardPeriodLabel" style="font-size: 13px; color: #888; align-self: center;"></span>
+                </div>
+
                 <!-- au+1Collection全体統計 -->
                 <h3>au+1Collection全体実績</h3>
                 <div class="stats-grid">
@@ -876,9 +893,38 @@
         });
 
         // ダッシュボード
+        function _updateDashboardPeriodLabel(start, end) {
+            const label = document.getElementById('dashboardPeriodLabel');
+            if (!label) return;
+            if (start && end) {
+                label.textContent = `表示期間: ${start} 〜 ${end}`;
+            } else if (start) {
+                label.textContent = `表示期間: ${start} 〜`;
+            } else if (end) {
+                label.textContent = `表示期間: 〜 ${end}`;
+            } else {
+                label.textContent = '表示期間: 全期間';
+            }
+        }
+
         async function loadDashboard() {
             try {
-                // au+1Collection統計も読み込み
+                // 保存済み期間をインプットに反映（未設定なら当月で初期化）
+                const savedStart = localStorage.getItem('dashboardStartDate');
+                const savedEnd   = localStorage.getItem('dashboardEndDate');
+                const startInput = document.getElementById('dashboardStartDateInput');
+                const endInput   = document.getElementById('dashboardEndDateInput');
+                if (startInput && endInput) {
+                    if (savedStart && savedEnd) {
+                        startInput.value = savedStart;
+                        endInput.value   = savedEnd;
+                        _updateDashboardPeriodLabel(savedStart, savedEnd);
+                    } else {
+                        // 初回: 当月を自動セット
+                        setDashboardCurrentMonth();
+                        return; // setDashboardCurrentMonth が loadDashboardStats を呼ぶ
+                    }
+                }
                 loadDashboardStats();
             } catch (error) {
                 console.error('Error loading dashboard:', error);
@@ -887,27 +933,75 @@
 
         function setDashboardCurrentMonth() {
             const today = new Date();
-            const year = today.getFullYear();
+            const year  = today.getFullYear();
             const month = String(today.getMonth() + 1).padStart(2, '0');
-            
-            // 当月の1日
-            const firstDay = `${year}-${month}-01`;
-            
-            // 当月の最終日
-            const lastDay = new Date(year, today.getMonth() + 1, 0);
+            const firstDay   = `${year}-${month}-01`;
+            const lastDay    = new Date(year, today.getMonth() + 1, 0);
             const lastDayStr = `${year}-${month}-${String(lastDay.getDate()).padStart(2, '0')}`;
-            
-            // ローカルストレージに保存
+
+            const startInput = document.getElementById('dashboardStartDateInput');
+            const endInput   = document.getElementById('dashboardEndDateInput');
+            if (startInput) startInput.value = firstDay;
+            if (endInput)   endInput.value   = lastDayStr;
+
+            _updateDashboardPeriodLabel(firstDay, lastDayStr);
             localStorage.setItem('dashboardStartDate', firstDay);
-            localStorage.setItem('dashboardEndDate', lastDayStr);
-            
+            localStorage.setItem('dashboardEndDate',   lastDayStr);
+            loadDashboardStats();
+        }
+
+        function setDashboardPrevMonth() {
+            const today = new Date();
+            const prevMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+            const year  = prevMonth.getFullYear();
+            const month = String(prevMonth.getMonth() + 1).padStart(2, '0');
+            const firstDay   = `${year}-${month}-01`;
+            const lastDay    = new Date(year, prevMonth.getMonth() + 1, 0);
+            const lastDayStr = `${year}-${month}-${String(lastDay.getDate()).padStart(2, '0')}`;
+
+            const startInput = document.getElementById('dashboardStartDateInput');
+            const endInput   = document.getElementById('dashboardEndDateInput');
+            if (startInput) startInput.value = firstDay;
+            if (endInput)   endInput.value   = lastDayStr;
+
+            _updateDashboardPeriodLabel(firstDay, lastDayStr);
+            localStorage.setItem('dashboardStartDate', firstDay);
+            localStorage.setItem('dashboardEndDate',   lastDayStr);
+            loadDashboardStats();
+        }
+
+        function setDashboard3Months() {
+            const today = new Date();
+            const endStr  = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+            const from    = new Date(today.getFullYear(), today.getMonth() - 2, 1);
+            const startStr = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-01`;
+
+            const startInput = document.getElementById('dashboardStartDateInput');
+            const endInput   = document.getElementById('dashboardEndDateInput');
+            if (startInput) startInput.value = startStr;
+            if (endInput)   endInput.value   = endStr;
+
+            _updateDashboardPeriodLabel(startStr, endStr);
+            localStorage.setItem('dashboardStartDate', startStr);
+            localStorage.setItem('dashboardEndDate',   endStr);
             loadDashboardStats();
         }
 
         async function loadDashboardStats() {
             try {
-                const startDate = localStorage.getItem('dashboardStartDate') || '';
-                const endDate = localStorage.getItem('dashboardEndDate') || '';
+                // インプットから期間を取得（なければ localStorage へフォールバック）
+                const startInput  = document.getElementById('dashboardStartDateInput');
+                const endInput    = document.getElementById('dashboardEndDateInput');
+                const startDate   = (startInput && startInput.value) ? startInput.value
+                                    : (localStorage.getItem('dashboardStartDate') || '');
+                const endDate     = (endInput && endInput.value) ? endInput.value
+                                    : (localStorage.getItem('dashboardEndDate') || '');
+
+                // localStorage を最新値に同期
+                localStorage.setItem('dashboardStartDate', startDate);
+                localStorage.setItem('dashboardEndDate',   endDate);
+                _updateDashboardPeriodLabel(startDate, endDate);
+
                 const storeCode = document.getElementById('storeSelect').value;
                 
                 let url = `${API_BASE}/au1-collection/total`;
